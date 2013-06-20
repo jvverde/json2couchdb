@@ -8,7 +8,6 @@ sub usage{
 	print "Usage:\n\t$0 jsonPath value\n\n";
 }
 my $path = shift or usage and exit;
-my $value = shift or usage and exit;
 my @fields = split /\./, $path;
 
 my $ref = undef;
@@ -20,52 +19,54 @@ foreach (@fields){
 		$pref = \($$pref->{$_} = undef);
 	}
 }
-$$pref = $value;
 
-my $db = qCouchDB->new('http://localhost:5984/faturas/');
-my $json = new JSON;
-
-my $res = $db->get('_all_docs');
-my $docs = $json->decode($res); 
-my @ids = map{$_->{id} } @{$docs->{rows}};
-
-foreach my $id (@ids){
-	my $res = $db->get($id);
-	my $doc = $json->decode($res); 
-	#$doc->{$field} = $value unless exists $doc->{$field};
-	merge($doc,$ref);
-	my $text = $json->encode($doc);
-	print $text;
-	last;
-}
-
-sub merge{
-	my $data = shift;
-	my $ref = shift;
-	return undef unless ref $data eq ref $ref;
-	if (ref $ref eq q|HASH|){
-		my @k = keys %$ref;
-		my $k = $k[0];
-		if (defined $data->{$k}){
-			if (ref $data->{$k} and ref $data->{$k} eq ref $ref->{$k}){ 
-				merge($data->{$k},$ref->{$k});
-			}else{
-				$data->{$k} = $ref->{$k};
-			}
-		}else{
-			$data->{$k} = $ref->{$k};
-		}
-	}elsif(ref $ref eq q|ARRAY|){
-		my @k = keys @$ref;
-		my $k = $k[$#k];
-		if (defined $data->[$k]){
-			if (ref $data->[$k] and ref $data->[$k] eq ref $ref->[$k]){ 
-				merge($data->[$k],$ref->[$k]);
-			}else{
-				$data->[$k] = $ref->[$k];
-			}
-		}else{
-			$data->[$k] = $ref->[$k];
-		}
+my $data = {
+	a => { 
+		b => {
+			c => '123'
+		},
+		bb => [
+			6,
+			cc => { dd => 'dd'}
+		],
+		bbb => [
+			undef,
+			1
+		]
+		
 	}
+};
+
+my @re = map {
+	sub mre{
+		return qr/.+/ if $_ eq '*';
+		return qr/^$_$/;
+	}
+	mre;
+} @fields;
+print Dumper \@re;
+print "\n";
+print Dumper $data;
+my @r = findit($data,\@re, 0);
+print Dumper \@r;
+#$$r = [3,4];
+#print Dumper $data;
+
+sub findit{
+	my ($data,$path,$step) = @_;
+	return undef if $step > $#$path; #just in case
+	my $key = $path->[$step];
+	print "step = $step\t", "$key\n";
+	if ($step == $#$path){ #last step
+		return map {\$data->{$_}} grep {/$key/} keys %$data if ref $data eq q|HASH|;
+		return map {\$data->[$_]} grep {/$key/} (0..$#$data) if ref $data eq q|ARRAY|;
+		#return map {\$data->[$_]} if ref $data eq q|ARRAY| and $key =~ /^\d+$/ and int($key) <= $#$data;
+	}else{
+		if (ref $data eq q|HASH|){
+			return map{findit($data->{$_},$path,$step+1)} grep {/$key/} keys %$data;
+		}elsif(ref $data eq q|ARRAY|){
+			return map{findit($data->[$_],$path,$step+1)} grep {/$key/} (0..$#$data);
+		}	
+	}
+	return (undef);
 }
