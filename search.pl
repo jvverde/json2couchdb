@@ -8,18 +8,60 @@ sub usage{
 	print "Usage:\n\t$0 jsonPath value\n\n";
 }
 my $path = shift or usage and exit;
-my @fields = split /\./, $path;
-
-my $ref = undef;
-my $pref = \$ref;
-foreach (@fields){
-	if (/^\d/){
-		$pref = \($$pref->[$_] = undef);
-	}else{
-		$pref = \($$pref->{$_} = undef);
-	}
-}
-
+my @path = map {
+	my $filter = {
+		empty => sub{
+			my ($k,$v) = @_;
+			return !defined $v;
+		},
+		eq => sub{
+			my ($k,$v,$cond) = @_;
+			return $v eq $cond;
+		},
+		ne => sub{
+			my ($k,$v,$cond) = @_;
+			return $v ne $cond;
+		},
+		le => sub{
+			my ($k,$v,$cond) = @_;
+			return $v le $cond;
+		},
+		ge => sub{
+			my ($k,$v,$cond) = @_;
+			return $v ge $cond;
+		},
+		vmatch => sub{
+			my ($k,$v,$cond) = @_;
+			return $v =~ /$cond/;
+		},
+		type => sub{
+			my ($k,$v,$cond) = @_;
+			return ref $v  eq /$cond/;
+		},
+	};
+	sub mre {
+		my $step = $_[0];
+		my ($name,@filters) = split /\|/,$step;
+		my @checks = map{ 
+			my ($name,$arg) = ($_ =~ /^([^:]+)(?::(.+))?$/);
+			{filter => $name, arg => $arg}
+		} @filters;
+		print Dumper \@checks;
+		my $checkIt = sub{
+			my ($key,$val) = @_;
+			foreach (@checks){
+				next unless exists $filter->{$_->{filter}};
+				return undef unless $filter->{$_->{filter}}->($key,$val,$_->{arg});
+			}
+			return 1;
+		};
+		return $checkIt if $name eq '*';
+		return sub {#last change
+			return $_[0] eq $name and $checkIt->{@_};
+		};
+	};
+	mre $_;
+} split /\./, $path;
 my $data = {
 	a => { 
 		b => {
@@ -33,40 +75,23 @@ my $data = {
 			undef,
 			1
 		]
-		
+
 	}
 };
-
-my @re = map {
-	sub mre{
-		return qr/.+/ if $_ eq '*';
-		return qr/^$_$/;
-	}
-	mre;
-} @fields;
-print Dumper \@re;
-print "\n";
 print Dumper $data;
-my @r = findit($data,\@re, 0);
+my @r = findit($data,\@path, 0);
 print Dumper \@r;
-#$$r = [3,4];
-#print Dumper $data;
 
 sub findit{
 	my ($data,$path,$step) = @_;
-	return undef if $step > $#$path; #just in case
-	my $key = $path->[$step];
-	print "step = $step\t", "$key\n";
+	return () if $step > $#$path; #just in case
+	my $check = $path->[$step];
 	if ($step == $#$path){ #last step
-		return map {\$data->{$_}} grep {/$key/} keys %$data if ref $data eq q|HASH|;
-		return map {\$data->[$_]} grep {/$key/} (0..$#$data) if ref $data eq q|ARRAY|;
-		#return map {\$data->[$_]} if ref $data eq q|ARRAY| and $key =~ /^\d+$/ and int($key) <= $#$data;
+		return map {\$data->{$_}} grep {$check->($_, $data->{$_})} keys %$data if ref $data eq q|HASH|;
+		return map {\$data->[$_]} grep {$check->($_, $data->[$_])} (0..$#$data) if ref $data eq q|ARRAY|;
 	}else{
-		if (ref $data eq q|HASH|){
-			return map{findit($data->{$_},$path,$step+1)} grep {/$key/} keys %$data;
-		}elsif(ref $data eq q|ARRAY|){
-			return map{findit($data->[$_],$path,$step+1)} grep {/$key/} (0..$#$data);
-		}	
+		return map{findit($data->{$_},$path,$step+1)} grep {$check->($_, $data->{$_})} keys %$data if ref $data eq q|HASH|;
+		return map{findit($data->[$_],$path,$step+1)} grep {$check->($_, $data->[$_])} (0..$#$data) if ref $data eq q|ARRAY|;
 	}
-	return (undef);
+	return ();
 }
