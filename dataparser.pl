@@ -425,65 +425,197 @@ my $root = $reader->value;
 print "********root**********";
 print Dumper $root;
 print "********/root**********";
+sub arithmeticOper(&$$;@){
+		my ($oper,$x,$y,@e) = @_;
+		$x = operation($x) if ref $x;
+		$y = operation($y) if ref $y;
+		my $res = $oper->($x,$y);
+		foreach my $e (@e){
+			$e = operation($e) if ref $e;
+			$res = $oper->($res,$e);
+		}
+		return $res
+}
+sub logicalOper(&$$){
+		my ($oper,$x,$y) = @_;
+		$x = operation($x) if ref $x;
+		$y = operation($y) if ref $y;
+		return $oper->($x,$y)
+}
+my $filtersProc;
+$filtersProc = {
+	'eq' => sub($$){
+		return logicalOper(sub {$_[0] eq $_[1]}, $_[0], $_[1]);
+	},
+	'ne' => sub($$){
+		return logicalOper(sub {$_[0] ne $_[1]}, $_[0], $_[1]);
+	},
+	'==' => sub($$){
+		return logicalOper(sub {$_[0] == $_[1]}, $_[0], $_[1]);
+	},
+	'!=' => sub($$){
+		return logicalOper(sub {$_[0] != $_[1]}, $_[0], $_[1]);
+	},
+	'>' => sub($$){
+		return logicalOper(sub {$_[0] > $_[1]}, $_[0], $_[1]);
+	},
+	'>=' => sub($$){
+		return logicalOper(sub {$_[0] >= $_[1]}, $_[0], $_[1]);
+	},
+	'<' => sub($$){
+		return logicalOper(sub {$_[0] < $_[1]}, $_[0], $_[1]);
+	},
+	'<=' => sub($$){
+		return logicalOper(sub {$_[0] <= $_[1]}, $_[0], $_[1]);
+	},
+	'>=' => sub($$){
+		return logicalOper(sub {$_[0] >= $_[1]}, $_[0], $_[1]);
+	},
+	'lt' => sub($$){
+		return logicalOper(sub {$_[0] lt $_[1]}, $_[0], $_[1]);
+	},
+	'le' => sub($$){
+		return logicalOper(sub {$_[0] le $_[1]}, $_[0], $_[1]);
+	},
+	'gt' => sub($$){
+		return logicalOper(sub {$_[0] gt $_[1]}, $_[0], $_[1]);
+	},
+	'ge' => sub($$){
+		return logicalOper(sub {$_[0] ge $_[1]}, $_[0], $_[1]);
+	},
+	'and' => sub($$){
+		return logicalOper(sub {$_[0] and $_[1]}, $_[0], $_[1]);
+	},
+	'or' => sub($$){
+		return logicalOper(sub {$_[0] or $_[1]}, $_[0], $_[1]);
+	},
+	'+' => sub($$;@){
+		return arithmeticOper(sub {$_[0] + $_[1]}, $_[0], $_[1], @_[2..$#_]);
+	},
+	'*' => sub($$;@){
+		return arithmeticOper(sub {$_[0] * $_[1]}, $_[0], $_[1], @_[2..$#_]);
+	},
+	'/' => sub($$;@){
+		return arithmeticOper(sub {$_[0] / $_[1]}, $_[0], $_[1], @_[2..$#_]);
+	},
+	'-' => sub($$;@){
+		return arithmeticOper(sub {$_[0] - $_[1]}, $_[0], $_[1], @_[2..$#_]);
+	},
+	'%' => sub($$;@){
+		return arithmeticOper(sub {$_[0] % $_[1]}, $_[0], $_[1], @_[2..$#_]);
+	},
+};
+sub operation($){
+	my $operData = $_[0];
+	return undef unless defined $operData and exists $operData->{oper};
+	my @filterParams = @{$operData->{oper}};
+	my $oper = $filterParams[0];
+	return undef unless exists $filtersProc->{$oper};
+	my @args = @filterParams[1..$#filterParams];
+	return $filtersProc->{$oper}->(@args);  
+}
 sub check{
 	my ($data, $filter) = @_;
-	return 1 unless defined $filter;
-	return 0;	
+	return 1 unless defined $filter; #no filter always returns true
+	foreach (@$filter){
+		return 0 unless operation($_)
+	}
+	return 1;	#true
 }
+
+my $indexesProc;
+$indexesProc = {
+	index => sub{
+		my ($data, $index, $subpath,$filter) = @_;
+		$index += $#$data + 1 if $index < 0;
+		return () unless $data->[$index];
+		return () if defined $filter and !check($data->[$index], $filter); 
+		my @r = ();	
+		push @r, 
+			defined $subpath ? 
+				getNodeSet($data->[$index], $subpath)
+				:  \$data->[$index];
+		return @r;
+	},
+	range => sub{
+		my ($data, $range, $subpath, $filter) = @_;
+		my ($start, $stop) = @{$range};
+		$start += $#$data + 1 if $start < 0;
+		$stop += $#$data + 1 if $stop < 0;
+		$stop = $#$data if $stop > $#$data;
+		my @indexes = $start <= $stop ?
+			($start..$stop)
+			: reverse ($stop..$start);
+		my @r = ();
+		push @r, $indexesProc->{index}->($data,$_,$subpath,$filter)
+			foreach (@indexes);
+		return @r;
+	},
+	from => sub{
+		my ($data, $from, $subpath,$filter) = @_;
+		$from += $#$data + 1 if $from < 0;
+		my @indexes = ($from..$#$data);
+		my @r = ();
+		push @r, $indexesProc->{index}->($data,$_,$subpath,$filter)
+			foreach (@indexes);
+		return @r;			
+	},
+	to => sub{
+		my ($data, $to, $subpath,$filter) = @_;	
+		$to += $#$data + 1 if $to < 0;
+		my @indexes = (0..$to);
+		my @r = ();
+		push @r, $indexesProc->{index}->($data,$_,$subpath,$filter)
+			foreach (@indexes);
+		return @r;	
+	},
+
+};
+
+my $keysProc;
+$keysProc = {
+	step => sub{
+		my ($data, $step, $subpath,$filter) = @_;
+		return () unless exists $data->{$step};
+		return () if defined $filter and !check($data->{$step}, $filter); 
+		my @r = ();	
+		push @r, 
+			defined $subpath ? 
+				getNodeSet($data->{$step}, $subpath)
+				: (\$data->{$step});
+		return @r;
+	},
+	wildcard => sub{
+		my ($data, undef, $subpath,$filter) = @_;
+		my @r = ();
+		push @r, $keysProc->{step}->($data, $_, $subpath,$filter)
+			foreach (keys %$data);
+		return @r;
+	}
+};
+
 sub getNodeSet{
 	my ($data, $path) = @_;
+	return () unless ref $path eq q|HASH|;
 
 	if (ref $data eq q|HASH|){
-		if (defined $path->{step}){	
-			return () unless exists $data->{$path->{step}} 
-				and check($data->{$path->{step}}, $path->{filter});
-			if ($path->{subpath}){
-				return getNodeSet($data->{$path->{step}}, $path->{subpath})
-			}else{	
-				return (\$data->{$path->{step}})
-			}
-		}elsif(defined $path->{wildcard}){
-			my @r = ();
-			if ($path->{subpath}){
-				foreach my $k (keys %$data){
-					push @r, getNodeSet($data->{$k}, $path->{subpath})
-						if check($data->{$path->{$k}, $path->{filter})
-				}			
-			}else{
-				foreach my $k (keys %$data){
-					push @r, \$data->{$k}
-						if check($data->{$path->{$k}, $path->{filter})
-				}
-			}
-			return @r;
-		}else{
-			return ();
-		}	
+		my @keys = grep{exists $path->{$_}} keys %$keysProc;
+		my @r = ();
+		push @r, $keysProc->{$_}->($data, $path->{$_}, $path->{subpath}, $path->{filter})
+			foreach (@keys);
+		return @r;
 	}elsif(ref $data eq q|ARRAY|){
 		my $indexes = $path->{indexes};
-		if (defined $indexes){
-			my @r = ();
-			if ($path->{subpath}){
-				foreach my $entry (@$indexes){
-					if (defined $data->[$entry->{index}]){
-						push @r, getNodeSet($data->[$entry->{index}], $path->{subpath})
-					}
-				}
-			}else{
-				foreach my $entry (@$indexes){
-					if (defined $data->[$entry->{index}]){
-						push @r, \$data->[$entry->{index}]
-					}
-				}
-			}
-			return @r;
-		}else{
-			return ()
-		}			
+		return () unless defined $indexes;
+		my @r = ();
+		foreach my $entry (@$indexes){
+			push @r, $indexesProc->{$_}->($data,$entry->{$_},$path->{subpath},$path->{filter})
+				foreach (grep {exists $indexesProc->{$_}} keys %$entry); 	#just in case use grep to filter out not supported indexes types
+		}
+		return @r;		
 	}
-	warn "Shouldn't occur!!";
+	#warn "Shouldn't occur->1!!";
 	return ();
-
 }
 
 my $data = {
@@ -502,7 +634,14 @@ my $data = {
 	},
 	xx => [
 		12,
-		yy => {zz => 'ccccc', ww=>'dddd'}	
+		{y => {zz => 'ccccc', ww=>'dddd'}},
+		'ww',
+		987,
+		[1,
+			4,
+			7,
+			{q=>q|qqqqq|}
+		]	
 	]
 
 };
@@ -511,5 +650,7 @@ my @r = getNodeSet($data, ${$root}->{path}->[0]);
 
 print Dumper \@r;
 
-${@r[0]} = 'yyyyyyyyyyyyyy' if defined @r[0] and ref @r[0];
+foreach ((0..$#r)){
+	${$r[$_]} = 'yyyyyyyyyyyyyy' if defined $r[$_] and ref $r[$_] 
+}
 print Dumper $data;
