@@ -110,7 +110,7 @@ ArithmeticExpr ::=
 
 LogicalExpr ::=
 	compareExpr												action => do_arg1
-	|LogicalFunction
+	|LogicalFunction										action => do_arg1
 
 compareExpr ::=	
 	PathExpr 												action => do_exists
@@ -138,34 +138,36 @@ StringExpr ::=
  	| StringFunction 										action => do_arg1
  	|| StringExpr '||' StringExpr  							action => do_binaryOperator
 
-
-# UserDefinedFunction ::=
-# 	FunctionName '(' ArgList ')' 							action => do_func
-
-# ArgList ::= Argument* separator => <comma>
-
-# Argument ::= Expr 											action => do_arg1
-
-# Expr ::=
-# 	NumericExpr												action => do_arg1		
-# 	|LogicalExpr											action => do_arg1
-
 LogicalFunction ::=
 	'not' '(' LogicalExpr ')'			 					action => do_func
+	| 'isRef' '(' PathArgs ')'			 					action => do_func
+	| 'isScalar' '(' PathArgs ')'			 				action => do_func
+	| 'isArray' '(' PathArgs ')'			 				action => do_func
+	| 'isHash' '(' PathArgs ')'			 					action => do_func
+	| 'isCode' '(' PathArgs ')'								action => do_func
 
 StringFunction ::=
-	'name' '(' PathExpr ')'				 					action => do_func
-	| ValueFunction
+	NameFunction											action => do_arg1
+	| ValueFunction											action => do_arg1
+
+NameFunction ::= 
+	'name' '(' PathArgs ')'				 					action => do_func
+
+PathArgs ::= PathExpr*				separator => <comma>    action => do_arg1
 
 ValueFunction ::= 
-	'value' '(' PathExpr ')'				 				action => do_func
+	'value' '(' PathArgs ')'				 				action => do_func
 
 CountFunction ::= 
-	'count' '(' PathExpr ')'				 				action => do_func
+	'count' '(' PathArgs ')'				 				action => do_func
+
+SumFunction ::= 
+	'sum' '(' PathArgs ')'				 					action => do_func
 
 NumericFunction ::=
 	CountFunction											action => do_arg1
 	|ValueFunction											action => do_arg1
+	|SumFunction											action => do_arg1
 
 IntegerFunction ::=
 	CountFunction											action => do_arg1
@@ -186,8 +188,7 @@ unumber
  
 uint            
 	~ digits
-#	| '-' digits
-#	| '+' digits
+
 
  
 digits 
@@ -216,14 +217,15 @@ UINT
 	~digits
 
 STRING       ::= lstring               				action => do_string
-RegularExpr ~ delimiter re delimiter				
+RegularExpr ::= regularstring						action => do_re
+regularstring ~ delimiter re delimiter				
 
 delimiter ~ [/]
 
- re ~ char*
+re ~ char*
 
- char ~ [^/\\]
- 	| '\' [^\\]
+char ~ [^/\\]
+ 	| '\' '/'
  	| '\\'
 
 
@@ -234,20 +236,7 @@ in_string      ~ in_string_char*
  
 in_string_char  ~ [^"\\]
 	| '\' '"'
-	| '\' 'b'
-	| '\' 'f'
-	| '\' 't'
-	| '\' 'n'
-	| '\' 'r'
-	| '\' 'u' four_hex_digits
-	| '\' '/'
 	| '\\'
-
-
-four_hex_digits ~ hex_digit hex_digit hex_digit hex_digit
-hex_digit       ~ [0-9a-fA-F]
-
-#FunctionName  ~ []
 
 comma ~ ','
 
@@ -263,7 +252,7 @@ END_OF_SOURCE
 #from http://www.emacswiki.org/emacs/XPath_BNF
 my $reader = Marpa::R2::Scanless::R->new({
 	grammar => $grammar,
-	trace_terminals => 1,
+	trace_terminals => 0,
 });
 
 
@@ -287,29 +276,19 @@ sub do_operationSetPathWithValue{
 sub do_operationSetPathFromPath{
 	return {oper => q|SET|, type => $_[2], path => $_[1], fromPath => $_[3]}	
 }
+sub do_re{
+	my $re = $_[1];
+	$re =~ s/^\/|\/$//g;
+	return qr/$re/;
+}
 sub do_string {
-    shift;
-    my $s = $_[0];
- 
-    $s =~ s/^"//;
-    $s =~ s/"$//;
- 
-    $s =~ s/\\u([0-9A-Fa-f]{4})/chr(hex($1))/eg;
- 
-    $s =~ s/\\n/\n/g;
-    $s =~ s/\\r/\r/g;
-    $s =~ s/\\b/\b/g;
-    $s =~ s/\\f/\f/g;
-    $s =~ s/\\t/\t/g;
-    $s =~ s/\\\\/\\/g;
-    $s =~ s{\\/}{/}g;
-    $s =~ s{\\"}{"}g;
- 
+    my $s = $_[1]; 
+    $s =~ s/^"|"$//g;
     return $s;
 }
 sub do_func{
 	my $args =	@_[3..$#_-1];
-	return {func => [$_[1], $args]}
+	return {oper => [$_[1], $args ? $args : []]}
 }
 sub do_join{
 	return join '', @_[1..$#_];
@@ -422,9 +401,10 @@ chomp $input;
 #print "input = $input\n"; 
 $reader->read(\$input);
 my $root = $reader->value;
-print "********root**********";
-print Dumper $root;
-print "********/root**********";
+# print "********root**********";
+# print Dumper $root;
+# print "********/root**********";
+my @context = ();
 sub arithmeticOper(&$$;@){
 		my ($oper,$x,$y,@e) = @_;
 		$x = operation($x) if ref $x;
@@ -438,8 +418,8 @@ sub arithmeticOper(&$$;@){
 }
 sub logicalOper(&$$){
 		my ($oper,$x,$y) = @_;
-		$x = operation($x) if ref $x;
-		$y = operation($y) if ref $y;
+		$x = operation($x) if ref $x and ref $x ne q|Regexp|;
+		$y = operation($y) if ref $y and ref $y ne q|Regexp|;
 		return $oper->($x,$y)
 }
 my $filtersProc;
@@ -489,6 +469,12 @@ $filtersProc = {
 	'or' => sub($$){
 		return logicalOper(sub {$_[0] or $_[1]}, $_[0], $_[1]);
 	},
+	'~' => sub($$){
+		return logicalOper(sub {$_[0] =~ $_[1]}, $_[0], $_[1]);
+	},
+	'!~' => sub($$){
+		return logicalOper(sub {$_[0] !~ $_[1]}, $_[0], $_[1]);
+	},
 	'+' => sub($$;@){
 		return arithmeticOper(sub {$_[0] + $_[1]}, $_[0], $_[1], @_[2..$#_]);
 	},
@@ -504,18 +490,98 @@ $filtersProc = {
 	'%' => sub($$;@){
 		return arithmeticOper(sub {$_[0] % $_[1]}, $_[0], $_[1], @_[2..$#_]);
 	},
+	names => sub{
+		my $paths = $_[0];
+		return ($context[$#context]->{step}) if scalar @$paths == 0;
+		my @r = ();
+		foreach my $path (@$paths){
+			my @objs = getNodeSet($context[$#context]->{data},$path);
+			foreach my $obj (@objs){
+				push @r, $obj->{name};
+			}	
+		}
+		return @r;
+	},
+	values => sub{
+		my $paths = $_[0];
+		return ($context[$#context]->{data}) if scalar @$paths == 0;
+		my @r = ();
+		foreach my $path (@$paths){
+			my @objs = getNodeSet($context[$#context]->{data},$path);
+			foreach my $obj (@objs){
+				push @r, $obj->{data};
+			}	
+		}
+		return @r;
+	},
+	isHash => sub{
+		my $paths = $_[0];
+		return ref $context[$#context]->{data} eq q|HASH| if scalar @$paths == 0;
+		return 0;	
+	},
+	isArray => sub{
+		my $paths = $_[0];
+		return ref $context[$#context]->{data} eq q|ARRAY| if scalar @$paths == 0;
+		return 0;	
+	},
+	isCode => sub{
+		my $paths = $_[0];
+		return ref $context[$#context]->{data} eq q|CODE| if scalar @$paths == 0;
+		return 0;			
+	},
+	isRef => sub{
+		my $paths = $_[0];
+		return ref $context[$#context]->{data} if scalar @$paths == 0;
+		return 0;	
+	},
+	isScalar => sub{
+		my $paths = $_[0];
+		return !ref $context[$#context]->{data} if scalar @$paths == 0;
+		return 0;	
+	},
+	name => sub{
+		my @r = $filtersProc->{names}->(@_);
+		return $r[0] if defined $r[0];
+		return q||; 
+	},
+	value => sub(){
+		my @r = $filtersProc->{values}->(@_);
+		return $r[0] if defined $r[0];
+		return q||; 
+	},
+	count =>sub{
+		my $paths = $_[0];
+		my $c = 0;
+		foreach my $path (@$paths){
+			my @objs = getNodeSet($context[$#context]->{data},$path);
+			$c += @objs;	
+		}
+		return $c;
+	},
+	exists => sub{
+		my $paths = $_[0];
+		my $c = 0;
+		foreach my $path (@$paths){
+			my @objs = getNodeSet($context[$#context]->{data},$path);
+			$c += @objs;	
+		}
+		return $c > 0;		
+	},
+	not => sub{
+		return !operation($_[0]);
+	}
 };
 sub operation($){
 	my $operData = $_[0];
-	return undef unless defined $operData and exists $operData->{oper};
-	my @filterParams = @{$operData->{oper}};
-	my $oper = $filterParams[0];
+	return undef unless defined $operData and ref $operData eq "HASH" and exists $operData->{oper};
+	my @params = @{$operData->{oper}};
+	my $oper = $params[0];
 	return undef unless exists $filtersProc->{$oper};
-	my @args = @filterParams[1..$#filterParams];
+	my @args = @params[1..$#params];
 	return $filtersProc->{$oper}->(@args);  
 }
 sub check{
-	my ($data, $filter) = @_;
+	my ($filter) = @_;
 	return 1 unless defined $filter; #no filter always returns true
 	foreach (@$filter){
 		return 0 unless operation($_)
@@ -529,12 +595,17 @@ $indexesProc = {
 		my ($data, $index, $subpath,$filter) = @_;
 		$index += $#$data + 1 if $index < 0;
 		return () unless $data->[$index];
-		return () if defined $filter and !check($data->[$index], $filter); 
 		my @r = ();	
-		push @r, 
-			defined $subpath ? 
-				getNodeSet($data->[$index], $subpath)
-				:  \$data->[$index];
+		#$subpath->{currentObj} = $data->[$index] if defined $subpath;
+		push @context, {step => $index, data  => $data->[$index], type => q|index|};
+		sub{
+			return if defined $filter and !check($filter); 
+			push @r, 
+				defined $subpath ? 
+					getNodeSet($data->[$index],$subpath)
+					:{data => \$data->[$index], name => $index, context => [@context]}
+		}->();
+		pop @context;
 		return @r;
 	},
 	range => sub{
@@ -577,12 +648,18 @@ $keysProc = {
 	step => sub{
 		my ($data, $step, $subpath,$filter) = @_;
 		return () unless exists $data->{$step};
-		return () if defined $filter and !check($data->{$step}, $filter); 
-		my @r = ();	
-		push @r, 
-			defined $subpath ? 
-				getNodeSet($data->{$step}, $subpath)
-				: (\$data->{$step});
+
+		my @r = ();
+		#$subpath->{currentObj} = $data->{$step} if defined $subpath;
+		push @context, {step => $step, data  => $data->{$step}, type => q|key|};
+		sub{	
+			return if defined $filter and !check($filter); 
+			push @r, 
+				defined $subpath ? 
+					getNodeSet($data->{$step}, $subpath)
+					: {data => \$data->{$step}, name => $step, context => [@context]};
+		}->();
+		pop @context;
 		return @r;
 	},
 	wildcard => sub{
@@ -595,36 +672,40 @@ $keysProc = {
 };
 
 sub getNodeSet{
-	my ($data, $path) = @_;
+	my ($data,$path) = @_;
 	return () unless ref $path eq q|HASH|;
 
+	my @r = ();
 	if (ref $data eq q|HASH|){
 		my @keys = grep{exists $path->{$_}} keys %$keysProc;
-		my @r = ();
 		push @r, $keysProc->{$_}->($data, $path->{$_}, $path->{subpath}, $path->{filter})
 			foreach (@keys);
-		return @r;
 	}elsif(ref $data eq q|ARRAY|){
 		my $indexes = $path->{indexes};
 		return () unless defined $indexes;
-		my @r = ();
 		foreach my $entry (@$indexes){
 			push @r, $indexesProc->{$_}->($data,$entry->{$_},$path->{subpath},$path->{filter})
 				foreach (grep {exists $indexesProc->{$_}} keys %$entry); 	#just in case use grep to filter out not supported indexes types
 		}
-		return @r;		
 	}
-	#warn "Shouldn't occur->1!!";
-	return ();
+	return @r;
+}
+sub getObjects{
+		my ($data, $path) = @_;
+		return getNodeSet($data,$path);
 }
 
+my $test = 12345;
 my $data = {
 	a =>{
 		b =>{
 			c => 3
 		},
 		bb =>{
-			cc => 4
+			cc => 4,
+		},
+		bbb => sub{
+			print "this is code";
 		}
 	},
 	aa =>{
@@ -634,6 +715,7 @@ my $data = {
 	},
 	xx => [
 		12,
+		$test,
 		{y => {zz => 'ccccc', ww=>'dddd'}},
 		'ww',
 		987,
@@ -645,12 +727,17 @@ my $data = {
 	]
 
 };
+print "----------------------Path--------------------";
+print Dumper ${$root}->{path}->[0];
 
-my @r = getNodeSet($data, ${$root}->{path}->[0]);
+my @r = getObjects($data, ${$root}->{path}->[0]);
 
+print "-----------------------Result--------------------";
 print Dumper \@r;
 
 foreach ((0..$#r)){
-	${$r[$_]} = 'yyyyyyyyyyyyyy' if defined $r[$_] and ref $r[$_] 
+	${$r[$_]->{data}} = 'yyyyyyyyyyyyyy' if defined $r[$_] and ref $r[$_] eq q|HASH| and ref $r[$_]->{data} 
 }
+print "-----------------------Data--------------------";
 print Dumper $data;
+#print Dumper $data;
