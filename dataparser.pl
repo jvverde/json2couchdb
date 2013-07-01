@@ -265,16 +265,16 @@ sub do_condition{
 # 	return {action => q|compare|, what => $_[1]}
 # }
 sub do_getPath{
-	return {oper => q|GET|, path => $_[1]}	
+	return {oper => q|get|, path => $_[1]}	
 }
 sub do_operationSetPathUpdate{
-	return {oper => q|SET|, type => $_[2], path => $_[1]}	
+	return {oper => q|set|, type => $_[2], path => $_[1]}	
 }
 sub do_operationSetPathWithValue{
-	return {oper => q|SET|, type => $_[2], path => $_[1], value => $_[3]}	
+	return {oper => q|assignvalue|, type => $_[2], path => $_[1], value => $_[3]}	
 }
 sub do_operationSetPathFromPath{
-	return {oper => q|SET|, type => $_[2], path => $_[1], fromPath => $_[3]}	
+	return {oper => q|assignfrompath|, type => $_[2], path => $_[1], fromPath => $_[3]}	
 }
 sub do_re{
 	my $re = $_[1];
@@ -491,53 +491,7 @@ $filtersProc = {
 		return arithmeticOper(sub {$_[0] % $_[1]}, $_[0], $_[1], @_[2..$#_]);
 	},
 	names => sub{
-		my $paths = $_[0];
-		return ($context[$#context]->{step}) if scalar @$paths == 0;
-		my @r = ();
-		foreach my $path (@$paths){
-			my @objs = getNodeSet($context[$#context]->{data},$path);
-			foreach my $obj (@objs){
-				push @r, $obj->{name};
-			}	
-		}
-		return @r;
-	},
-	values => sub{
-		my $paths = $_[0];
-		return ($context[$#context]->{data}) if scalar @$paths == 0;
-		my @r = ();
-		foreach my $path (@$paths){
-			my @objs = getNodeSet($context[$#context]->{data},$path);
-			foreach my $obj (@objs){
-				push @r, $obj->{data};
-			}	
-		}
-		return @r;
-	},
-	isHash => sub{
-		my $paths = $_[0];
-		return ref $context[$#context]->{data} eq q|HASH| if scalar @$paths == 0;
-		return 0;	
-	},
-	isArray => sub{
-		my $paths = $_[0];
-		return ref $context[$#context]->{data} eq q|ARRAY| if scalar @$paths == 0;
-		return 0;	
-	},
-	isCode => sub{
-		my $paths = $_[0];
-		return ref $context[$#context]->{data} eq q|CODE| if scalar @$paths == 0;
-		return 0;			
-	},
-	isRef => sub{
-		my $paths = $_[0];
-		return ref $context[$#context]->{data} if scalar @$paths == 0;
-		return 0;	
-	},
-	isScalar => sub{
-		my $paths = $_[0];
-		return !ref $context[$#context]->{data} if scalar @$paths == 0;
-		return 0;	
+		return map {$_->{step}} getSubObjectsOrCurrent(@_);
 	},
 	name => sub{
 		my @r = $filtersProc->{names}->(@_);
@@ -549,28 +503,53 @@ $filtersProc = {
 		return $r[0] if defined $r[0];
 		return q||; 
 	},
+	values => sub{
+		return map {${$_->{data}}} getSubObjectsOrCurrent(@_);
+	},
+	isHash => sub{
+		my @r = grep {ref ${$_->{data}} eq q|HASH|} getSubObjectsOrCurrent(@_);
+		return @r > 0;
+	},
+	isArray => sub{
+		my @r = grep {ref ${$_->{data}} eq q|ARRAY|} getSubObjectsOrCurrent(@_);
+		return @r > 0;	
+	},
+	isCode => sub{
+		my @r = grep {ref ${$_->{data}} eq q|CODE|} getSubObjectsOrCurrent(@_);
+		return @r > 0;				
+	},
+	isRef => sub{
+		my @r = grep {ref ${$_->{data}}} getSubObjectsOrCurrent(@_);
+		return @r > 0;	
+	},
+	isScalar => sub{
+		my @r = grep {!ref ${$_->{data}}} getSubObjectsOrCurrent(@_);
+		return @r > 0;		
+	},
 	count =>sub{
-		my $paths = $_[0];
-		my $c = 0;
-		foreach my $path (@$paths){
-			my @objs = getNodeSet($context[$#context]->{data},$path);
-			$c += @objs;	
-		}
-		return $c;
+		my @r = getSubObjectsOrCurrent(@_);
+		return scalar @r;
 	},
 	exists => sub{
-		my $paths = $_[0];
-		my $c = 0;
-		foreach my $path (@$paths){
-			my @objs = getNodeSet($context[$#context]->{data},$path);
-			$c += @objs;	
-		}
-		return $c > 0;		
+		my @r = getSubObjectsOrCurrent(@_);
+		return scalar @r > 0;		
 	},
 	not => sub{
 		return !operation($_[0]);
 	}
 };
+sub getSubObjectsOrCurrent{
+	my $paths = $_[0];
+	my @r = ();
+	return ($context[$#context]) if scalar @$paths == 0;
+	foreach my $path (@$paths){
+		my @objs = getNodeSet(${$context[$#context]->{data}},$path);
+		foreach my $obj (@objs){
+			push @r, $obj;
+		}	
+	}
+	return @r;
+}
 sub operation($){
 	my $operData = $_[0];
 	return undef unless defined $operData and ref $operData eq "HASH" and exists $operData->{oper};
@@ -597,13 +576,13 @@ $indexesProc = {
 		return () unless $data->[$index];
 		my @r = ();	
 		#$subpath->{currentObj} = $data->[$index] if defined $subpath;
-		push @context, {step => $index, data  => $data->[$index], type => q|index|};
+		push @context, {step => $index, data  => \$data->[$index], type => q|index|};
 		sub{
 			return if defined $filter and !check($filter); 
 			push @r, 
 				defined $subpath ? 
 					getNodeSet($data->[$index],$subpath)
-					:{data => \$data->[$index], name => $index, context => [@context]}
+					:{data => \$data->[$index], step => $index, context => [@context]}
 		}->();
 		pop @context;
 		return @r;
@@ -651,13 +630,13 @@ $keysProc = {
 
 		my @r = ();
 		#$subpath->{currentObj} = $data->{$step} if defined $subpath;
-		push @context, {step => $step, data  => $data->{$step}, type => q|key|};
+		push @context, {step => $step, data  => \$data->{$step}, type => q|key|};
 		sub{	
 			return if defined $filter and !check($filter); 
 			push @r, 
 				defined $subpath ? 
 					getNodeSet($data->{$step}, $subpath)
-					: {data => \$data->{$step}, name => $step, context => [@context]};
+					: {data => \$data->{$step}, step => $step, context => [@context]};
 		}->();
 		pop @context;
 		return @r;
@@ -691,10 +670,28 @@ sub getNodeSet{
 	return @r;
 }
 sub getObjects{
-		my ($data, $path) = @_;
-		return getNodeSet($data,$path);
+		return map {getNodeSet($_[0],$_)}  (@_[1..$#_]);
 }
 
+my $method = {
+	get => sub{
+		my ($expression,$data) = @_;
+		return getObjects($data, @{$expression->{path}});	
+	},
+	assignvalue => sub{
+		my ($expression,$data) = @_;
+		my @r = getObjects($data, @{$expression->{path}});
+		do {${$_->{data}} = $expression->{value}} foreach (@r);
+		return @r;	
+	},
+	assignfrompath => sub {
+		my ($expression,$data) = @_;
+		my @r = getObjects($data, @{$expression->{path}});
+		my @values = map {${$_->{data}}} getObjects($data, @{$expression->{fromPath}});
+		${$_->{data}} = shift @values foreach my (@r);
+		return @r;			
+	}
+};
 my $test = 12345;
 my $data = {
 	a =>{
@@ -711,7 +708,8 @@ my $data = {
 	aa =>{
 		bb =>{
 			cc => 5
-		}
+		},
+		c => "cccccccccccccccccccc"
 	},
 	xx => [
 		12,
@@ -728,16 +726,14 @@ my $data = {
 
 };
 print "----------------------Path--------------------";
-print Dumper ${$root}->{path}->[0];
+print Dumper $root;
 
-my @r = getObjects($data, ${$root}->{path}->[0]);
+#my @r = getObjects($data, @{${$root}->{path}});
+my @r = $method->{${$root}->{oper}}->(${$root}, $data);
 
 print "-----------------------Result--------------------";
-print Dumper \@r;
+print Dumper [map {$_->{data}} @r];
 
-foreach ((0..$#r)){
-	${$r[$_]->{data}} = 'yyyyyyyyyyyyyy' if defined $r[$_] and ref $r[$_] eq q|HASH| and ref $r[$_]->{data} 
-}
 print "-----------------------Data--------------------";
 print Dumper $data;
 #print Dumper $data;
