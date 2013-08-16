@@ -31,6 +31,8 @@ my @ids = map{$_->{id} } @{$docs->{rows}};
 
 foreach my $id (@ids){
 	my $res = $db->get($id);
+	print $res;
+	last;
 	my $doc = $json->decode($res); 
 	#$doc->{$field} = $value unless exists $doc->{$field};
 	merge($doc,$ref);
